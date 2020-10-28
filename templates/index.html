@@ -61,6 +61,7 @@
           <ul class="list-unstyled">
           </ul>
           <input id="text" placeholder="Type here..." size=45 type="text" name="text">
+          <input id="speaker" placeholder="Speaker index" size=10 type="text" name="speaker">
           <button id="speak-button" name="speak">Speak</button><br/><br/>
           <audio id="audio" controls autoplay hidden></audio>
           <p id="message"></p>
@@ -74,11 +75,12 @@
             q('#text').focus()
             function do_tts(e) {
                 text = q('#text').value
+                speaker = q('#speaker').value
                 if (text) {
                     q('#message').textContent = 'Synthesizing...'
                     q('#speak-button').disabled = true
                     q('#audio').hidden = true
-                    synthesize(text)
+                    synthesize(text, speaker)
                 }
                 e.preventDefault()
                 return false
@@ -89,8 +91,13 @@
                 do_tts(e)
               }
             })
-            function synthesize(text) {
-                fetch('/api/tts?text=' + encodeURIComponent(text), {cache: 'no-cache'})
+            q('#speaker').addEventListener('keyup', function (e) {
+              if (e.keyCode == 13) { // enter
+                do_tts(e)
+              }
+            })
+            function synthesize(text, speaker) {
+                fetch(`/api/tts?text=${encodeURIComponent(text)}&speaker=${encodeURIComponent(speaker)}`, {cache: 'no-cache'})
                     .then(function(res) {
                         if (!res.ok) throw Error(res.statusText)
                             return res.blob()

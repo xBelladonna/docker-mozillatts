@@ -2,60 +2,55 @@ FROM python:3.6 as build
 
 ENV LANG C.UTF-8
 
-# IFDEF PROXY
-#! RUN echo 'Acquire::http { Proxy "http://${PROXY}"; };' >> /etc/apt/apt.conf.d/01proxy
-RUN echo 'Acquire::http { Proxy "http://192.168.1.8:3142"; };' >> /etc/apt/apt.conf.d/01proxy
-# ENDIF
-
+# Install build dependencies
 RUN apt-get update && \
-    apt-get install --yes --no-install-recommends \
+    apt-get install -y --no-install-recommends \
         espeak libsndfile1 git
 
 RUN mkdir -p /app
-RUN cd /app && \
-    git clone https://github.com/mozilla/TTS && \
-    cd TTS && \
-    git checkout b1935c97
+WORKDIR /app
 
-RUN cd /app/TTS && \
-    python3 -m venv .venv
+# Clone repo
+RUN git clone https://github.com/mozilla/TTS -b dev
 
-# IFDEF PYPI
-#! ENV PIP_INDEX_URL=http://${PYPI}/simple/
-#! ENV PIP_TRUSTED_HOST=${PYPI_HOST}
-ENV PIP_INDEX_URL=http://192.168.1.8:4000/simple/
-ENV PIP_TRUSTED_HOST=192.168.1.8
-# ENDIF
+# New virtualenv
+RUN python3 -m venv .venv
 
-RUN cd /app/TTS && \
-    .venv/bin/pip3 install --upgrade pip && \
-    .venv/bin/pip3 install -r requirements.txt && \
-    .venv/bin/python3 setup.py install
+# Install requirements
+WORKDIR /app/TTS
+RUN ../.venv/bin/pip3 install -U pip && \
+    ../.venv/bin/pip3 install -r requirements.txt
 
 # Extra packages missing from requirements
-RUN cd /app/TTS && \
-    .venv/bin/pip3 install inflect 'numba==0.48'
+#RUN .venv/bin/pip3 install inflect 'numba==0.48'
 
 # Packages needed for web server
-RUN cd /app/TTS && \
-    .venv/bin/pip3 install 'flask' 'flask-cors'
+RUN ../.venv/bin/pip3 install flask flask-cors
+
+# Install TTS
+RUN ../.venv/bin/python3 setup.py install
 
 # -----------------------------------------------------------------------------
 
 FROM python:3.6-slim
 
+# Install dependencies
 RUN apt-get update && \
-    apt-get install --yes --no-install-recommends \
-        espeak libsndfile1
+    apt-get install -y --no-install-recommends \
+        espeak libsndfile1 && \
+    apt-get clean
 
-COPY --from=build /app/TTS/.venv/ /app/
-COPY vocoder/ /app/vocoder/
+# Copy installed build
+COPY --from=build /app/.venv/ /app/
+# Copy models
 COPY model/ /app/model/
+COPY vocoder/ /app/vocoder/
+# Copy code
 COPY templates/ /app/templates/
-COPY tts.py scale_stats.npy /app/
+COPY tts.py /app/
 
 WORKDIR /app
 
-EXPOSE 5002
+EXPOSE 5002/tcp
 
 ENTRYPOINT ["/app/bin/python3", "/app/tts.py"]
