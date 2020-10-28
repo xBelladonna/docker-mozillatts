@@ -22,14 +22,14 @@ from TTS.vocoder.utils.generic_utils import setup_generator
 # -----------------------------------------------------------------------------
 
 
-def tts(model, vocoder_model, text, CONFIG, USE_CUDA: bool, ap, USE_GL: bool, SPEAKER_FILEID=None, speaker_embedding=None, STYLE_WAV=None):
+def tts(model, vocoder_model, text, CONFIG, use_cuda: bool, ap, use_gl: bool, SPEAKER_FILEID=None, speaker_embedding=None, gst_style=None):
     t_1 = time.time()
     waveform, _, _, mel_postnet_spec, _, _ = synthesis(
-        model, text, CONFIG, USE_CUDA, ap, SPEAKER_FILEID, STYLE_WAV, False, CONFIG.enable_eos_bos_chars, USE_GL, speaker_embedding=speaker_embedding)
+        model, text, CONFIG, use_cuda, ap, SPEAKER_FILEID, gst_style, False, CONFIG.enable_eos_bos_chars, use_gl, speaker_embedding=speaker_embedding)
 
     mel_postnet_spec = ap._denormalize(mel_postnet_spec.T).T
 
-    if not USE_GL:
+    if not use_gl:
         vocoder_input = ap_vocoder._normalize(mel_postnet_spec.T)
         if scale_factor[1] != 1:
             vocoder_input = interpolate_vocoder_input(
@@ -37,9 +37,9 @@ def tts(model, vocoder_model, text, CONFIG, USE_CUDA: bool, ap, USE_GL: bool, SP
         else:
             vocoder_input = torch.tensor(vocoder_input).unsqueeze(0)
         waveform = vocoder_model.inference(vocoder_input)
-    if USE_CUDA and not USE_GL:
+    if use_cuda and not use_gl:
         waveform = waveform.cpu()
-    if not USE_GL:
+    if not use_gl:
         waveform = waveform.numpy()
     waveform = waveform.squeeze()
 
@@ -79,6 +79,7 @@ def extract_speaker_names(speaker_json):
 
 # -----------------------------------------------------------------------------
 
+
 # Parse arguments
 parser = argparse.ArgumentParser()
 parser.add_argument("-s", "--speaker", type=int, default=None,
@@ -86,7 +87,7 @@ parser.add_argument("-s", "--speaker", type=int, default=None,
 args = parser.parse_args()
 
 # Runtime settings
-USE_CUDA = False
+use_cuda = False
 
 # Model paths
 _DIR = os.path.dirname(os.path.realpath(__file__))
@@ -96,8 +97,9 @@ TTS_CONFIG = os.path.join(_DIR, "model", "config.json")
 VOCODER_MODEL = os.path.join(_DIR, "vocoder", "checkpoint_1000000.pth.tar")
 VOCODER_CONFIG = os.path.join(_DIR, "vocoder", "config.json")
 SPEAKER_JSON = os.path.join(_DIR, "model", "speakers.json")
-SPEAKER_FILEID = None  # "p269_215.wav"  # if None use the first embedding from speakers.json
-STYLE_WAV = None # filename of encoder preprocessed wav or GST tokens as dict
+SPEAKER_FILEID = None  # "p269_215.wav"  # if None use the first embedding from speakers.json or embeddings from speaker given in speaker_choice
+STYLE_WAV = os.path.join(_DIR, "model", "gst_style.wav") # filename of style reference wav
+GST_TOKENS = os.path.join(_DIR, "model", "gst_style.json") # GST tokens as dict
 
 # Load configs
 TTS_CONFIG = load_config(TTS_CONFIG)
@@ -113,6 +115,17 @@ TTS_CONFIG.forward_attn_mask = True
 if 'characters' in TTS_CONFIG.keys():
     symbols, phonemes = make_symbols(**TTS_CONFIG.characters)
 
+# Load GST style
+if os.path.exists(STYLE_WAV):
+    gst_style = STYLE_WAV
+    print(f" > GST style: {gst_style}")
+elif os.path.exists(GST_TOKENS):
+    gst_style = json.load(open(GST_TOKENS))
+    print(f" > GST style: {json.dumps(gst_style)}")
+else:
+    gst_style = None
+
+
 # Get list of speaker names from speakers.json
 train_speakers = extract_speaker_names(SPEAKER_JSON)
 num_speakers = len(train_speakers)
@@ -120,14 +133,15 @@ print(f" > Speakers available: {num_speakers}")
 
 # Choose speaker
 speaker_index = 0
-SPEAKER_CHOICE = train_speakers[speaker_index]
+speaker_choice = train_speakers[speaker_index]
 
 if args.speaker is not None:
     speaker_index = args.speaker
-    SPEAKER_CHOICE = train_speakers[speaker_index]
-    print(f"Speaker #{args.speaker} ({SPEAKER_CHOICE}) selected")
+    speaker_choice = train_speakers[speaker_index]
+    print(f"Speaker #{args.speaker} ({speaker_choice}) selected")
 else:
-    print(f" > Speaker #{speaker_index} ({SPEAKER_CHOICE}) has been chosen automatically")
+    print(
+        f" > Speaker #{speaker_index} ({speaker_choice}) has been chosen automatically")
 
 num_samples_speaker = 100
 speaker_embedding = None
@@ -141,18 +155,18 @@ if SPEAKER_JSON != '':
     if TTS_CONFIG.use_external_speaker_embedding_file:
         if SPEAKER_FILEID is not None:
             speaker_embedding = speaker_mapping[SPEAKER_FILEID]['embedding']
-        elif SPEAKER_CHOICE is not None:
+        elif speaker_choice is not None:
             if TTS_CONFIG.use_external_speaker_embedding_file:
                 speaker_embeddings = []
                 for key in list(speaker_mapping.keys()):
-                    if SPEAKER_CHOICE in speaker_mapping[key]['name']:
+                    if speaker_choice in speaker_mapping[key]['name']:
                         if len(speaker_embeddings) < num_samples_speaker:
                             speaker_embeddings.append(
                                 speaker_mapping[key]['embedding'])
                 # takes the average of the embeddings samples of the speakers
                 speaker_embedding = np.mean(
                     np.array(speaker_embeddings), axis=0).tolist()
-        else:  # if SPEAKER_FILEID or SPEAKER_CHOICE is not specified use the first sample in speakers.json
+        else:  # if SPEAKER_FILEID or speaker_choice is not specified use the first sample in speakers.json
             choice_speaker = list(speaker_mapping.keys())[0]
             print(" Speaker ", choice_speaker.split(
                 '_')[0], "was chosen automatically")
@@ -161,14 +175,15 @@ if SPEAKER_JSON != '':
 
 # Load TTS model
 num_chars = len(phonemes) if TTS_CONFIG.use_phonemes else len(symbols)
-model = setup_model(num_chars, num_speaker_embeddings, TTS_CONFIG, speaker_embedding_dim)
-model, _ = load_checkpoint(model, TTS_MODEL, use_cuda=USE_CUDA)
-if USE_CUDA:
+model = setup_model(num_chars, num_speaker_embeddings,
+                    TTS_CONFIG, speaker_embedding_dim)
+model, _ = load_checkpoint(model, TTS_MODEL, use_cuda=use_cuda)
+if use_cuda:
     model.cuda()
 model.eval()
 
 # Load vocoder model
-USE_GL = False # Don't use Griffin Lim if vocoder is used
+use_gl = False # Don't use Griffin Lim if vocoder is used
 vocoder_model = setup_generator(VOCODER_CONFIG)
 vocoder_model.load_state_dict(torch.load(
     VOCODER_MODEL, map_location="cpu")["model"])
@@ -182,7 +197,7 @@ print(f" > Vocoder sample rate: {VOCODER_CONFIG['audio']['sample_rate']}")
 print(f" > Scale factor: {scale_factor}")
 
 ap_vocoder = AudioProcessor(**VOCODER_CONFIG['audio'])
-if USE_CUDA:
+if use_cuda:
     vocoder_model.cuda()
 vocoder_model.eval()
 
@@ -191,49 +206,45 @@ vocoder_model.eval()
 app = Flask("mozillatts")
 CORS(app)
 
+
 @app.route("/api/tts", methods=['GET', 'POST'])
 def api_tts():
-    global num_speakers
-    global speaker_embedding
-    global SPEAKER_CHOICE
-
     if request.method == 'GET':
         text = request.args.get("text")
-        new_speaker_index = request.args.get("speaker")
+        _speaker_index = request.args.get("speaker")
     else:
         content = request.get_json()
+        keys = content.keys()
 
         text = content["text"]
-        new_speaker_index = content["speaker"]
+        _speaker_index = content["speaker"] if "speaker" in keys else None
 
     if text is None:
         return Response("No text provided", status=400)
 
-    if new_speaker_index is not None and new_speaker_index is not "":
+    if _speaker_index is not None and _speaker_index is not "":
         # arrays are zero-indexed so we return 400 if equal to or greater than the number of elements in the array
-        if int(new_speaker_index) >= num_speakers:
+        if int(_speaker_index) >= num_speakers:
             return Response(f"Speaker does not exist. There are only {num_speakers} speakers in total. Please select a speaker from 0-{num_speakers - 1}", status=400)
 
-        NEW_SPEAKER_CHOICE = train_speakers[int(new_speaker_index.strip())]
+        _speaker_choice = train_speakers[int(_speaker_index.strip())]
         print(
-            f" > Speaker #{new_speaker_index} ({NEW_SPEAKER_CHOICE}) selected")
+            f" > Speaker #{_speaker_index} ({_speaker_choice}) selected")
 
-        new_speaker_embeddings = []
+        _speaker_embeddings = []
         for key in list(speaker_mapping.keys()):
-            if NEW_SPEAKER_CHOICE in speaker_mapping[key]['name']:
-                if len(new_speaker_embeddings) < num_samples_speaker:
-                    new_speaker_embeddings.append(
+            if _speaker_choice in speaker_mapping[key]['name']:
+                if len(_speaker_embeddings) < num_samples_speaker:
+                    _speaker_embeddings.append(
                         speaker_mapping[key]['embedding'])
         # takes the average of the embeddings samples of the speakers
-        new_speaker_embedding = np.mean(
-            np.array(new_speaker_embeddings), axis=0).tolist()
-
-        wav = tts(model, vocoder_model, text.strip(), TTS_CONFIG, USE_CUDA, ap, USE_GL,
-                    SPEAKER_FILEID, speaker_embedding=new_speaker_embedding, STYLE_WAV=STYLE_WAV)
+        _speaker_embedding = np.mean(
+            np.array(_speaker_embeddings), axis=0).tolist()
     else:
-        print(f" > Using default speaker #{speaker_index} ({SPEAKER_CHOICE})")
-        wav = tts(model, vocoder_model, text.strip(), TTS_CONFIG, USE_CUDA, ap, USE_GL,
-                    SPEAKER_FILEID, speaker_embedding=speaker_embedding, STYLE_WAV=STYLE_WAV)
+        _speaker_embedding = speaker_embedding
+
+    wav = tts(model, vocoder_model, text.strip(), TTS_CONFIG, use_cuda, ap, use_gl,
+              SPEAKER_FILEID, speaker_embedding=_speaker_embedding, gst_style=gst_style)
 
     with io.BytesIO() as out:
         ap.save_wav(wav, out)
