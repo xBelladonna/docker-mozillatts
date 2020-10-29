@@ -97,7 +97,8 @@
               }
             })
             function synthesize(text, speaker) {
-                fetch(`/api/tts?text=${encodeURIComponent(text)}&speaker=${encodeURIComponent(speaker)}`, {cache: 'no-cache'})
+                let pathName = window.location.pathname
+                fetch(`${pathName.replace(/\/$/, '')}/api/tts?text=${encodeURIComponent(text)}&speaker=${encodeURIComponent(speaker)}`, {cache: 'no-cache'})
                     .then(function(res) {
                         if (!res.ok) throw Error(res.statusText)
                             return res.blob()
