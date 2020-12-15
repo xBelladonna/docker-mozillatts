@@ -1,4 +1,4 @@
-FROM python:3.6-slim as build
+FROM continuumio/miniconda3 as build
 
 ENV LANG C.UTF-8
 
@@ -8,37 +8,39 @@ RUN apt-get update && \
         build-essential espeak libsndfile1 git && \
     apt-get clean
 
-RUN mkdir -p /app
-WORKDIR /app
+RUN mkdir -p /app/env
 
 # Clone repo
-RUN git clone https://github.com/mozilla/TTS -b dev
+RUN git clone https://github.com/mozilla/TTS app/TTS
 
-# New virtualenv
-RUN python3 -m venv .venv
+# New Conda environment
+RUN conda update -n base -c defaults conda && \
+    conda create --yes --prefix /app/.venv python=3.6 pip
+
+WORKDIR /app/TTS
 
 # Install requirements
-WORKDIR /app/TTS
-RUN ../.venv/bin/pip3 install -U pip && \
-    ../.venv/bin/pip3 install -r requirements.txt
-
-# Extra packages missing from requirements
-#RUN ../.venv/bin/pip3 install inflect 'numba==0.48'
+RUN ../.venv/bin/pip3 install -r requirements.txt
 
 # Packages needed for web server
 RUN ../.venv/bin/pip3 install flask flask-cors
+
+# Extra packages missing from requirements
+#RUN ../.venv/bin/pip3 install inflect 'numba==0.48'
 
 # Install TTS
 RUN ../.venv/bin/python3 setup.py install
 
 # -----------------------------------------------------------------------------
 
-FROM python:3.6-slim
+FROM nvidia/cuda:10.1-runtime
+
+ENV LANG C.UTF-8
 
 # Install dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        espeak libsndfile1 && \
+    espeak libsndfile1 && \
     apt-get clean
 
 # Copy installed build

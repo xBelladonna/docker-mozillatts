@@ -2,7 +2,7 @@
 
 Docker image for [Mozilla TTS](https://github.com/mozilla/TTS).
 
-Includes [@erogol's](https://github.com/erogol) pre-built multi-speaker Tacotron2 English model and full-band MelGAN vocoder.
+Includes [@erogol's](https://github.com/erogol) pre-built multi-speaker Tacotron2 English model (trained on VCTK corpus) and full-band MelGAN vocoder.
 See [below](#building-yourself) for links to specific checkpoints.
 
 ## Using
